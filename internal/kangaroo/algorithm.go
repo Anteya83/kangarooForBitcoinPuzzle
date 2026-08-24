@@ -18,25 +18,26 @@ import (
 )
 
 type KangarooSolver struct {
-	cfg            config.Config
-	a, b           *big.Int
-	pubKey         *types.Point
-	tameMap        *shardedmap.ShardedMap
-	tamePos        *types.Point
-	tameDist       *big.Int
-	found          int32
-	result         *big.Int
-	mu             sync.Mutex
-	stopChan       chan struct{}
-	wg             sync.WaitGroup
-	stats          *Stats
-	jumpTable      []*big.Int
-	stateFile      string
-	saveCounter    int64
-	maxJump        int64
-	totalTameJumps int64
-	closeOnce      sync.Once
-	posMu          sync.RWMutex
+	cfg               config.Config
+	a, b              *big.Int
+	pubKey            *types.Point
+	tameMap           *shardedmap.ShardedMap
+	tamePos           *types.Point
+	tameDist          *big.Int
+	found             int32
+	result            *big.Int
+	mu                sync.Mutex
+	stopChan          chan struct{}
+	wg                sync.WaitGroup
+	stats             *Stats
+	jumpTable         []*big.Int
+	stateFile         string
+	saveCounter       int64
+	maxJump           int64
+	totalTameJumps    int64
+	closeOnce         sync.Once
+	posMu             sync.RWMutex
+	distinguishedMask *big.Int
 }
 type Stats struct {
 	sync.Mutex
@@ -55,47 +56,48 @@ func NewKangarooSolver(cfg config.Config, publicKey *types.Point, a, b *big.Int)
 	for i := int64(1); i <= effectiveMaxJump; i++ {
 		jumpTable[i-1] = new(big.Int).Exp(big.NewInt(2), big.NewInt(i-1), nil)
 	}
-	stateFile := generateStateFilename(cfg.PublicKeyHex, cfg.StartRangeHex, cfg.EndRangeHex)
+	mask := new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), uint(cfg.DistinguishedBits)),
+		big.NewInt(1),
+	)
+	stateFile := generateStateFilename(publicKey, a, b)
 	return &KangarooSolver{
-		cfg:       cfg,
-		a:         new(big.Int).Set(a),
-		b:         new(big.Int).Set(b),
-		pubKey:    publicKey,
-		tameMap:   shardedmap.NewShardedMap(cfg.NumShards),
-		stopChan:  make(chan struct{}),
-		stats:     &Stats{StartTime: time.Now()},
-		jumpTable: jumpTable,
-		maxJump:   effectiveMaxJump,
-		stateFile: stateFile,
+		cfg:               cfg,
+		a:                 new(big.Int).Set(a),
+		b:                 new(big.Int).Set(b),
+		pubKey:            publicKey,
+		tameMap:           shardedmap.NewShardedMap(cfg.NumShards),
+		stopChan:          make(chan struct{}),
+		stats:             &Stats{StartTime: time.Now()},
+		jumpTable:         jumpTable,
+		maxJump:           effectiveMaxJump,
+		distinguishedMask: mask,
+		stateFile:         stateFile,
 	}
 }
-func generateStateFilename(pubKeyHex, startHex, endHex string) string {
-	data := pubKeyHex + "|" + startHex + "|" + endHex
+func generateStateFilename(pubKey *types.Point, a, b *big.Int) string {
+	data := pubKey.X.Text(16) + "|" + pubKey.Y.Text(16) + "|" + a.Text(16) + "|" + b.Text(16)
 	hash := sha256.Sum256([]byte(data))
 	return fmt.Sprintf("state_%x.bin", hash[:8])
 }
 func (k *KangarooSolver) isDistinguished(p *types.Point) bool {
-	mask := new(big.Int).Sub(
-		new(big.Int).Lsh(big.NewInt(1), uint(k.cfg.DistinguishedBits)),
-		big.NewInt(1),
-	)
-	low := new(big.Int).And(p.X, mask)
+	var low big.Int
+	low.And(p.X, k.distinguishedMask)
 	return low.Sign() == 0
 }
 func (k *KangarooSolver) jumpDistance(p *types.Point) *big.Int {
 	xb := p.X.Bytes()
 	yb := p.Y.Bytes()
-	if len(xb) == 0 && len(yb) == 0 {
-		return k.jumpTable[0]
+	h := uint64(14695981039346656037)
+	for _, b := range xb {
+		h ^= uint64(b)
+		h *= 1099511628211
 	}
-	var seed byte
-	if len(xb) > 0 {
-		seed ^= xb[len(xb)-1]
+	for _, b := range yb {
+		h ^= uint64(b)
+		h *= 1099511628211
 	}
-	if len(yb) > 0 {
-		seed ^= yb[len(yb)-1]
-	}
-	idx := int64(seed) % k.maxJump
+	idx := int64(h % uint64(k.maxJump))
 	return k.jumpTable[idx]
 }
 
@@ -230,7 +232,13 @@ func (k *KangarooSolver) tameKangaroo() {
 }
 func (k *KangarooSolver) wildKangaroo(workerID int) {
 	defer k.wg.Done()
-	offset := big.NewInt(int64(workerID * 1000))
+	width := new(big.Int).Sub(k.b, k.a)
+	step := new(big.Int).Div(width, big.NewInt(int64(k.cfg.NumWorkers*2)))
+	if step.Sign() == 0 {
+		step = big.NewInt(1)
+	}
+	offset := new(big.Int).Mul(big.NewInt(int64(workerID+1)), step)
+	offset.Mod(offset, width)
 	wildPos := crypto.AddPoints(k.pubKey, crypto.ScalarMult(offset, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
 	wildDist := new(big.Int).Set(offset)
 	for {
@@ -244,20 +252,24 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 			if k.isDistinguished(wildPos) {
 				key := fmt.Sprintf("%x,%x", wildPos.X, wildPos.Y)
 				if tameDist, exists := k.tameMap.Get(key); exists {
-					if atomic.CompareAndSwapInt32(&k.found, 0, 1) {
-						result := new(big.Int).Add(k.b, tameDist)
-						result.Sub(result, wildDist)
-						result.Mod(result, crypto.N)
-						k.mu.Lock()
-						k.result = result
-						k.mu.Unlock()
-						k.stats.Lock()
-						k.stats.CollisionTime = time.Now()
-						k.stats.Unlock()
-						atomic.AddInt32(&k.stats.CollisionsFound, 1)
-						k.saveState(result)
-						k.closeOnce.Do(func() { close(k.stopChan) })
-						return
+					result := new(big.Int).Add(k.b, tameDist)
+					result.Sub(result, wildDist)
+					result.Mod(result, crypto.N)
+
+					checkPub := crypto.PubKeyFromPrivate(result)
+					if checkPub.X.Cmp(k.pubKey.X) == 0 && checkPub.Y.Cmp(k.pubKey.Y) == 0 {
+						if atomic.CompareAndSwapInt32(&k.found, 0, 1) {
+							k.mu.Lock()
+							k.result = result
+							k.mu.Unlock()
+							k.stats.Lock()
+							k.stats.CollisionTime = time.Now()
+							k.stats.Unlock()
+							atomic.AddInt32(&k.stats.CollisionsFound, 1)
+							k.saveState(result)
+							k.closeOnce.Do(func() { close(k.stopChan) })
+							return
+						}
 					}
 				}
 			}
@@ -301,7 +313,17 @@ func (k *KangarooSolver) Solve() *big.Int {
 	k.wg.Add(1)
 	go k.tameKangaroo()
 	fmt.Println("Populating distinguished points...")
-	time.Sleep(1 * time.Second)
+	minDP := 100
+	for k.tameMap.Len() < minDP {
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-k.stopChan:
+			k.wg.Wait()
+			return k.result
+		default:
+		}
+	}
+
 	for i := 0; i < k.cfg.NumWorkers; i++ {
 		k.wg.Add(1)
 		go k.wildKangaroo(i)
