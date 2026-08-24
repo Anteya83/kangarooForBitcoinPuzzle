@@ -14,6 +14,7 @@ A concurrent implementation of **Pollard's Kangaroo (Lambda) algorithm** in Go, 
   - Private key to WIF (compressed)
   - Public key extraction and compression
   - P2PKH and P2SH address generation
+- **CLI flags** for flexible configuration.
 - **Clean package structure** for easy extension.
 
 ---
@@ -24,6 +25,8 @@ A concurrent implementation of **Pollard's Kangaroo (Lambda) algorithm** in Go, 
 kangarooForBitcoinPuzzle/
 ├── main.go                  # Entry point
 ├── go.mod
+├── go.sum
+├── .gitignore
 └── internal/
     ├── types/                # Point on elliptic curve
     ├── crypto/               # EC arithmetic, key parsing
@@ -31,9 +34,13 @@ kangarooForBitcoinPuzzle/
     ├── state/                # Save/load persistent state
     ├── config/               # Configuration struct and defaults
     ├── encoding/             # WIF, addresses
-    └── kangaroo/             # Main solver logic
+    ├── kangaroo/             # Main solver logic
+    └── cli/                  # CLI flags parsing
 ```
+---
+### Prerequisites
 
+- Go 1.26 or later
 ---
 
 ### Build and Run
@@ -70,7 +77,23 @@ go test ./internal/kangaroo/ -v
 This runs a small-range test that should complete in under 2 seconds.
 
 ---
+## CLI Flags
 
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-pubkey` | Public key in hex (compressed or uncompressed) | (from config) |
+| `-start` | Start of the search range (hexadecimal) | (from config) |
+| `-end` | End of the search range (hexadecimal) | (from config) |
+| `-workers` | Number of concurrent goroutines (wild kangaroos) | `16` |
+| `-dpbits` | Distinguished bits (low bits of X to check) | `12` |
+| `-maxjump` | Max jump size (`0` = auto‑calculate) | `0` (auto) |
+| `-tamelimit` | Maximum steps for the tame kangaroo before giving up | `1e18` (effectively unlimited) |
+To see all flags:
+
+```bash
+./kangaroo -help
+````
+---
 ## Configuration
 
 All configurable parameters are defined in `internal/config/config.go`. You can either modify the `DefaultConfig()` function .
@@ -94,13 +117,17 @@ All configurable parameters are defined in `internal/config/config.go`. You can 
 
 Modify the `DefaultConfig()` function in `internal/config/config.go` to set your own values.
 
+**Option B: Use CLI flags (recommended)**
 
+```bash
+./kangaroo -pubkey 024ee... -start 80000 -end fffff -workers 8 -dpbits 4 -tamelimit 1000000
+````
 ## How It Works
 
 1. The **tame kangaroo** starts from the upper bound `b * G` and makes pseudorandom jumps, storing only **distinguished points** (points whose X coordinate has a certain number of low bits zero).
-2. The **wild kangaroo** starts from the target public key and makes the same jumps.
+2. The **wild kangaroo** starts from the target public key and makes pseudorandom upward jumps.
 3. When a wild kangaroo lands on a distinguished point already visited by the tame kangaroo, a collision occurs.
-4. The private key is recovered as `b + tame_distance - wild_distance`.
+4. The private key is recovered as `b - tame_distance - wild_distance`.
 5. The solver automatically saves its progress to `state_<hash>.bin`, so you can stop and resume anytime.
 
 ---

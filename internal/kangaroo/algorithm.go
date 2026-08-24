@@ -227,8 +227,7 @@ func (k *KangarooSolver) tameKangaroo() {
 			}
 
 			jump := k.jumpDistance(pos)
-			negJump := new(big.Int).Neg(jump)
-			pos = crypto.AddPoints(pos, crypto.ScalarMult(negJump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
+			pos = crypto.AddPoints(pos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
 			dist.Add(dist, jump)
 			totalJumps++
 
@@ -261,10 +260,13 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 			if k.isDistinguished(wildPos) {
 				key := fmt.Sprintf("%x,%x", wildPos.X, wildPos.Y)
 				if tameDist, exists := k.tameMap.Get(key); exists {
-					result := new(big.Int).Sub(k.b, tameDist)
+					result := new(big.Int).Add(k.b, tameDist)
 					result.Sub(result, wildDist)
 					result.Mod(result, crypto.N)
 
+					if result.Cmp(k.a) < 0 || result.Cmp(k.b) > 0 {
+						continue
+					}
 					checkPub := crypto.PubKeyFromPrivate(result)
 					if checkPub.X.Cmp(k.pubKey.X) == 0 && checkPub.Y.Cmp(k.pubKey.Y) == 0 {
 						if atomic.CompareAndSwapInt32(&k.found, 0, 1) {
