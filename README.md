@@ -156,3 +156,10 @@ If you find this tool useful or if you simply liked , donations are welcome!
 
 Bitcoin (BTC): bc1q2xmq60x9qg5xfs5t8aavghj4jfzqknuq5plz6x
 
+---
+## About me
+
+I've been interested in Bitcoin for a long time. 
+I have ready‑made programs for brute‑forcing and seed phrase recovery when some known data is available. 
+I can write a custom program tailored to your specific request.
+
