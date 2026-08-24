@@ -2,25 +2,51 @@ package main
 
 import (
 	"fmt"
+	"kangarooForBitcoinPuzzle/internal/config"
 	"kangarooForBitcoinPuzzle/internal/crypto"
+	"kangarooForBitcoinPuzzle/internal/encoding"
+	"kangarooForBitcoinPuzzle/internal/kangaroo"
 	"math/big"
+	"runtime"
+	"time"
 )
 
 func main() {
-	fmt.Println("--Kangaroo start--")
+	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	priv := big.NewInt(10000)
-	pub := crypto.PubKeyFromPrivate(priv)
-	fmt.Printf("Privkey: %v\n", priv)
-	fmt.Printf("Pub X: %x\n", pub.X)
-	fmt.Printf("Pub Y: %x\n", pub.Y)
+	cfg := config.DefaultConfig()
 
-	compressed := "024ee2be2d4e9f92d2f5a4a03058617dc45befe22938feed5b7a6b7282dd74cbdd"
-	pub2, err := crypto.ParsePubKey(compressed)
+	fmt.Printf("Pub key: %s\n", cfg.PublicKeyHex)
+	fmt.Printf("Range: %s - %s\n", cfg.StartRangeHex, cfg.EndRangeHex)
+
+	pubKey, err := crypto.ParsePubKey(cfg.PublicKeyHex)
 	if err != nil {
-		fmt.Println("parsing crash:", err)
-	} else {
-		fmt.Printf("Pub X: %x\n", pub2.X)
-		fmt.Printf("Pub Y: %x\n", pub2.Y)
+		panic(err)
 	}
+	a, b := new(big.Int), new(big.Int)
+	a.SetString(cfg.StartRangeHex, 16)
+	b.SetString(cfg.EndRangeHex, 16)
+
+	solver := kangaroo.NewKangarooSolver(cfg, pubKey, a, b)
+	start := time.Now()
+	found := solver.Solve()
+	elapsed := time.Since(start)
+
+	solver.PrintStats()
+	if found != nil {
+		privHex := fmt.Sprintf("%064x", found)
+		wif, _ := encoding.PrivateKeyToWIF(privHex)
+		pubBytes, _ := encoding.GetPublicKey(privHex)
+		compressed := encoding.CompressPublicKey(pubBytes)
+		addr, _ := encoding.PublicKeyToAddress(compressed)
+		p2sh, _ := encoding.PublicKeyToP2SHAddress(compressed)
+
+		fmt.Printf("PrivKey HEX: %s\n", privHex)
+		fmt.Printf("WIF(compressed): %s\n", wif)
+		fmt.Printf("Addr(P2PKH): %s\n", addr)
+		fmt.Printf("Addr(P2SH): %s\n", p2sh)
+	} else {
+		fmt.Println("Key not found")
+	}
+	fmt.Printf("Time: %v\n", elapsed)
 }
