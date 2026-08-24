@@ -21,7 +21,7 @@ func main() {
 	fmt.Printf("Distinguished bits: %d\n", cfg.DistinguishedBits)
 	fmt.Printf("Workers: %d\n", cfg.NumWorkers)
 	fmt.Printf("MaxJump: %d (0 = auto)\n", cfg.MaxJump)
-
+	fmt.Printf("Tame limit: %d steps\n", cfg.TameStepsLimit)
 	pubKey, err := crypto.ParsePubKey(cfg.PublicKeyHex)
 	if err != nil {
 		fmt.Printf("Parse error: %v\n", err)

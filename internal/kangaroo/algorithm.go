@@ -227,7 +227,8 @@ func (k *KangarooSolver) tameKangaroo() {
 			}
 
 			jump := k.jumpDistance(pos)
-			pos = crypto.AddPoints(pos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
+			negJump := new(big.Int).Neg(jump)
+			pos = crypto.AddPoints(pos, crypto.ScalarMult(negJump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
 			dist.Add(dist, jump)
 			totalJumps++
 
@@ -260,7 +261,7 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 			if k.isDistinguished(wildPos) {
 				key := fmt.Sprintf("%x,%x", wildPos.X, wildPos.Y)
 				if tameDist, exists := k.tameMap.Get(key); exists {
-					result := new(big.Int).Add(k.b, tameDist)
+					result := new(big.Int).Sub(k.b, tameDist)
 					result.Sub(result, wildDist)
 					result.Mod(result, crypto.N)
 
