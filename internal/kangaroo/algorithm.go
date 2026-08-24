@@ -50,8 +50,16 @@ type Stats struct {
 }
 
 func NewKangarooSolver(cfg config.Config, publicKey *types.Point, a, b *big.Int) *KangarooSolver {
-	effectiveMaxJump, bits := optimalMaxJump(a, b)
-	fmt.Printf("Auto MaxJump = %d (width bits=%d)\n", effectiveMaxJump, bits)
+	var effectiveMaxJump int64
+	var bits int
+	if cfg.MaxJump > 0 {
+		effectiveMaxJump = cfg.MaxJump
+		width := new(big.Int).Sub(b, a)
+		bits = width.BitLen()
+	} else {
+		effectiveMaxJump, bits = optimalMaxJump(a, b)
+	}
+	fmt.Printf("Using MaxJump = %d (width bits=%d)\n", effectiveMaxJump, bits)
 	jumpTable := make([]*big.Int, effectiveMaxJump)
 	for i := int64(1); i <= effectiveMaxJump; i++ {
 		jumpTable[i-1] = new(big.Int).Exp(big.NewInt(2), big.NewInt(i-1), nil)
@@ -370,8 +378,6 @@ func optimalMaxJump(a, b *big.Int) (int64, int) {
 	if jump < 4 {
 		jump = 4
 	}
-	if jump > 48 {
-		jump = 48
-	}
+
 	return jump, bits
 }

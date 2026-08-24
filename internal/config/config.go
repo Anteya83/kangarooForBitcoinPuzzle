@@ -19,7 +19,7 @@ func DefaultConfig() Config {
 		StartRangeHex:     "80000",
 		EndRangeHex:       "fffff",
 		NumWorkers:        16,
-		MaxJump:           48,
+		MaxJump:           0,
 		TameStepsLimit:    1000000000000000000,
 		DistinguishedBits: 12,
 		NumShards:         64,

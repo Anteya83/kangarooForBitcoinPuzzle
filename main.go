@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"kangarooForBitcoinPuzzle/internal/config"
+	"kangarooForBitcoinPuzzle/internal/cli"
 	"kangarooForBitcoinPuzzle/internal/crypto"
 	"kangarooForBitcoinPuzzle/internal/encoding"
 	"kangarooForBitcoinPuzzle/internal/kangaroo"
@@ -14,15 +14,20 @@ import (
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	cfg := config.DefaultConfig()
+	cfg := cli.ParseFlags()
 
-	fmt.Printf("Pub key: %s\n", cfg.PublicKeyHex)
+	fmt.Printf("Public key: %s\n", cfg.PublicKeyHex)
 	fmt.Printf("Range: %s - %s\n", cfg.StartRangeHex, cfg.EndRangeHex)
+	fmt.Printf("Distinguished bits: %d\n", cfg.DistinguishedBits)
+	fmt.Printf("Workers: %d\n", cfg.NumWorkers)
+	fmt.Printf("MaxJump: %d (0 = auto)\n", cfg.MaxJump)
 
 	pubKey, err := crypto.ParsePubKey(cfg.PublicKeyHex)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Parse error: %v\n", err)
+		return
 	}
+
 	a, b := new(big.Int), new(big.Int)
 	a.SetString(cfg.StartRangeHex, 16)
 	b.SetString(cfg.EndRangeHex, 16)
@@ -42,7 +47,7 @@ func main() {
 		p2sh, _ := encoding.PublicKeyToP2SHAddress(compressed)
 
 		fmt.Printf("PrivKey HEX: %s\n", privHex)
-		fmt.Printf("WIF(compressed): %s\n", wif)
+		fmt.Printf("WIF(uncompressed): %s\n", wif)
 		fmt.Printf("Addr(P2PKH): %s\n", addr)
 		fmt.Printf("Addr(P2SH): %s\n", p2sh)
 	} else {
