@@ -18,22 +18,25 @@ import (
 )
 
 type KangarooSolver struct {
-	cfg         config.Config
-	a, b        *big.Int
-	pubKey      *types.Point
-	tameMap     *shardedmap.ShardedMap
-	tamePos     *types.Point
-	tameDist    *big.Int
-	found       int32
-	result      *big.Int
-	mu          sync.Mutex
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
-	stats       *Stats
-	jumpTable   []*big.Int
-	stateFile   string
-	saveCounter int64
-	maxJump     int64
+	cfg            config.Config
+	a, b           *big.Int
+	pubKey         *types.Point
+	tameMap        *shardedmap.ShardedMap
+	tamePos        *types.Point
+	tameDist       *big.Int
+	found          int32
+	result         *big.Int
+	mu             sync.Mutex
+	stopChan       chan struct{}
+	wg             sync.WaitGroup
+	stats          *Stats
+	jumpTable      []*big.Int
+	stateFile      string
+	saveCounter    int64
+	maxJump        int64
+	totalTameJumps int64
+	closeOnce      sync.Once
+	posMu          sync.RWMutex
 }
 type Stats struct {
 	sync.Mutex
@@ -108,14 +111,21 @@ func (k *KangarooSolver) saveState(foundKey *big.Int) error {
 	k.tameMap.ForEach(func(key string, val *big.Int) {
 		mapData[key] = val.Text(16)
 	})
+
+	k.posMu.RLock()
+	tameX := k.tamePos.X.Text(16)
+	tameY := k.tamePos.Y.Text(16)
+	tameDist := k.tameDist.Text(16)
+	k.posMu.RUnlock()
+
 	st := &state.State{
 		Version:        1,
 		PublicKeyHex:   k.cfg.PublicKeyHex,
 		StartRangeHex:  k.cfg.StartRangeHex,
 		EndRangeHex:    k.cfg.EndRangeHex,
-		TamePosX:       k.tamePos.X.Text(16),
-		TamePosY:       k.tamePos.Y.Text(16),
-		TameDist:       k.tameDist.Text(16),
+		TamePosX:       tameX,
+		TamePosY:       tameY,
+		TameDist:       tameDist,
 		TotalTameSteps: atomic.LoadInt64(&k.stats.TotalTameSteps),
 		TotalWildSteps: atomic.LoadInt64(&k.stats.TotalWildSteps),
 		Map:            mapData,
@@ -131,6 +141,7 @@ func (k *KangarooSolver) loadState() (bool, *big.Int, error) {
 		return false, nil, nil
 	}
 	if !st.IsValid(k.cfg.PublicKeyHex, k.cfg.StartRangeHex, k.cfg.EndRangeHex) {
+
 		return false, nil, nil
 	}
 	if st.FoundKey != "" {
@@ -141,8 +152,12 @@ func (k *KangarooSolver) loadState() (bool, *big.Int, error) {
 
 	tameX, _ := new(big.Int).SetString(st.TamePosX, 16)
 	tameY, _ := new(big.Int).SetString(st.TamePosY, 16)
+	tameDist, _ := new(big.Int).SetString(st.TameDist, 16)
+
+	k.posMu.Lock()
 	k.tamePos = types.NewPoint(tameX, tameY)
-	k.tameDist, _ = new(big.Int).SetString(st.TameDist, 16)
+	k.tameDist = tameDist
+	k.posMu.Unlock()
 	for key, distStr := range st.Map {
 		dist, _ := new(big.Int).SetString(distStr, 16)
 		if dist != nil {
@@ -155,11 +170,17 @@ func (k *KangarooSolver) loadState() (bool, *big.Int, error) {
 }
 func (k *KangarooSolver) tameKangaroo() {
 	defer k.wg.Done()
+	k.posMu.Lock()
 	if k.tamePos == nil {
 		k.tamePos = crypto.ScalarMult(k.b, &types.Point{X: crypto.Gx, Y: crypto.Gy})
 		k.tameDist = big.NewInt(0)
 	}
+	pos := k.tamePos
+	dist := k.tameDist
+	k.posMu.Unlock()
+
 	saveCounter := int64(0)
+	totalJumps := int64(0)
 	for {
 		select {
 		case <-k.stopChan:
@@ -173,13 +194,14 @@ func (k *KangarooSolver) tameKangaroo() {
 			}
 			return
 		default:
-			if atomic.LoadInt64(&k.stats.TotalTameSteps) > k.cfg.TameStepsLimit {
+			if totalJumps > k.cfg.TameStepsLimit {
 				k.saveState(nil)
+				k.closeOnce.Do(func() { close(k.stopChan) })
 				return
 			}
-			if k.isDistinguished(k.tamePos) {
-				key := fmt.Sprintf("%x,%x", k.tamePos.X, k.tamePos.Y)
-				k.tameMap.Set(key, new(big.Int).Set(k.tameDist))
+			if k.isDistinguished(pos) {
+				key := fmt.Sprintf("%x,%x", pos.X, pos.Y)
+				k.tameMap.Set(key, new(big.Int).Set(dist))
 				atomic.AddInt64(&k.stats.TotalTameSteps, 1)
 				saveCounter++
 				if saveCounter%int64(k.cfg.SaveInterval) == 0 {
@@ -193,9 +215,16 @@ func (k *KangarooSolver) tameKangaroo() {
 					}
 				}
 			}
-			jump := k.jumpDistance(k.tamePos)
-			k.tamePos = crypto.AddPoints(k.tamePos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
-			k.tameDist.Add(k.tameDist, jump)
+
+			jump := k.jumpDistance(pos)
+			pos = crypto.AddPoints(pos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
+			dist.Add(dist, jump)
+			totalJumps++
+
+			k.posMu.Lock()
+			k.tamePos = pos
+			k.tameDist = dist
+			k.posMu.Unlock()
 		}
 	}
 }
@@ -227,7 +256,7 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 						k.stats.Unlock()
 						atomic.AddInt32(&k.stats.CollisionsFound, 1)
 						k.saveState(result)
-						close(k.stopChan)
+						k.closeOnce.Do(func() { close(k.stopChan) })
 						return
 					}
 				}
@@ -266,7 +295,7 @@ func (k *KangarooSolver) Solve() *big.Int {
 		<-sigChan
 		fmt.Println("\nInterrupt received, saving state...")
 		k.saveState(nil)
-		close(k.stopChan)
+		k.closeOnce.Do(func() { close(k.stopChan) })
 	}()
 
 	k.wg.Add(1)
