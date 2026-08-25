@@ -38,6 +38,7 @@ type KangarooSolver struct {
 	closeOnce         sync.Once
 	posMu             sync.RWMutex
 	distinguishedMask *big.Int
+	saveMu            sync.Mutex
 }
 type Stats struct {
 	sync.Mutex
@@ -123,9 +124,14 @@ func (k *KangarooSolver) saveState(foundKey *big.Int) error {
 	})
 
 	k.posMu.RLock()
-	tameX := k.tamePos.X.Text(16)
-	tameY := k.tamePos.Y.Text(16)
-	tameDist := k.tameDist.Text(16)
+	var tameX, tameY, tameDist string
+	if k.tamePos != nil && k.tameDist != nil {
+		tameX = k.tamePos.X.Text(16)
+		tameY = k.tamePos.Y.Text(16)
+		tameDist = k.tameDist.Text(16)
+	} else {
+		tameX, tameY, tameDist = "", "", ""
+	}
 	k.posMu.RUnlock()
 
 	st := &state.State{
@@ -143,12 +149,17 @@ func (k *KangarooSolver) saveState(foundKey *big.Int) error {
 	if foundKey != nil {
 		st.FoundKey = foundKey.Text(16)
 	}
+	k.saveMu.Lock()
+	defer k.saveMu.Unlock()
 	return st.Save(k.stateFile)
 }
 func (k *KangarooSolver) loadState() (bool, *big.Int, error) {
 	st, err := state.Load(k.stateFile)
 	if err != nil {
-		return false, nil, nil
+		if os.IsNotExist(err) {
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf("failed to load state: %w", err)
 	}
 	if !st.IsValid(k.cfg.PublicKeyHex, k.cfg.StartRangeHex, k.cfg.EndRangeHex) {
 
@@ -156,13 +167,26 @@ func (k *KangarooSolver) loadState() (bool, *big.Int, error) {
 	}
 	if st.FoundKey != "" {
 		fk := new(big.Int)
-		fk.SetString(st.FoundKey, 16)
+		if _, ok := fk.SetString(st.FoundKey, 16); !ok {
+			return false, nil, fmt.Errorf("invalid FoundKey: %s", st.FoundKey)
+		}
 		return true, fk, nil
 	}
-
-	tameX, _ := new(big.Int).SetString(st.TamePosX, 16)
-	tameY, _ := new(big.Int).SetString(st.TamePosY, 16)
-	tameDist, _ := new(big.Int).SetString(st.TameDist, 16)
+	if st.TamePosX == "" || st.TamePosY == "" || st.TameDist == "" {
+		return false, nil, fmt.Errorf("state has empty coordinates, ignoring")
+	}
+	tameX, ok := new(big.Int).SetString(st.TamePosX, 16)
+	if !ok {
+		return false, nil, fmt.Errorf("invalid TamePosX: %s", st.TamePosX)
+	}
+	tameY, ok := new(big.Int).SetString(st.TamePosY, 16)
+	if !ok {
+		return false, nil, fmt.Errorf("invalid TamePosY: %s", st.TamePosY)
+	}
+	tameDist, ok := new(big.Int).SetString(st.TameDist, 16)
+	if !ok {
+		return false, nil, fmt.Errorf("invalid TameDist: %s", st.TameDist)
+	}
 
 	k.posMu.Lock()
 	k.tamePos = types.NewPoint(tameX, tameY)
@@ -185,8 +209,11 @@ func (k *KangarooSolver) tameKangaroo() {
 		k.tamePos = crypto.ScalarMult(k.b, &types.Point{X: crypto.Gx, Y: crypto.Gy})
 		k.tameDist = big.NewInt(0)
 	}
-	pos := k.tamePos
-	dist := k.tameDist
+	pos := &types.Point{
+		X: new(big.Int).Set(k.tamePos.X),
+		Y: new(big.Int).Set(k.tamePos.Y),
+	}
+	dist := new(big.Int).Set(k.tameDist)
 	k.posMu.Unlock()
 
 	saveCounter := int64(0)
@@ -233,7 +260,7 @@ func (k *KangarooSolver) tameKangaroo() {
 
 			k.posMu.Lock()
 			k.tamePos = pos
-			k.tameDist = dist
+			k.tameDist = new(big.Int).Set(dist)
 			k.posMu.Unlock()
 		}
 	}
@@ -264,22 +291,21 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 					result.Sub(result, wildDist)
 					result.Mod(result, crypto.N)
 
-					if result.Cmp(k.a) < 0 || result.Cmp(k.b) > 0 {
-						continue
-					}
-					checkPub := crypto.PubKeyFromPrivate(result)
-					if checkPub.X.Cmp(k.pubKey.X) == 0 && checkPub.Y.Cmp(k.pubKey.Y) == 0 {
-						if atomic.CompareAndSwapInt32(&k.found, 0, 1) {
-							k.mu.Lock()
-							k.result = result
-							k.mu.Unlock()
-							k.stats.Lock()
-							k.stats.CollisionTime = time.Now()
-							k.stats.Unlock()
-							atomic.AddInt32(&k.stats.CollisionsFound, 1)
-							k.saveState(result)
-							k.closeOnce.Do(func() { close(k.stopChan) })
-							return
+					if result.Cmp(k.a) >= 0 && result.Cmp(k.b) <= 0 {
+						checkPub := crypto.PubKeyFromPrivate(result)
+						if checkPub.X.Cmp(k.pubKey.X) == 0 && checkPub.Y.Cmp(k.pubKey.Y) == 0 {
+							if atomic.CompareAndSwapInt32(&k.found, 0, 1) {
+								k.mu.Lock()
+								k.result = result
+								k.mu.Unlock()
+								k.stats.Lock()
+								k.stats.CollisionTime = time.Now()
+								k.stats.Unlock()
+								atomic.AddInt32(&k.stats.CollisionsFound, 1)
+								k.saveState(result)
+								k.closeOnce.Do(func() { close(k.stopChan) })
+								return
+							}
 						}
 					}
 				}
@@ -299,8 +325,9 @@ func (k *KangarooSolver) Solve() *big.Int {
 
 	loaded, foundKey, err := k.loadState()
 	if err != nil {
-		fmt.Printf("Err loading state: %v, starting fresh\n", err)
+		fmt.Printf("State file is corrupted: %v, removing and starting fresh\n", err)
 		os.Remove(k.stateFile)
+		loaded = false
 	}
 	if loaded && foundKey != nil {
 		fmt.Printf("Key already found!\n")
@@ -311,27 +338,35 @@ func (k *KangarooSolver) Solve() *big.Int {
 	} else {
 		fmt.Println("Starting fresh search...")
 	}
-
+	done := make(chan struct{})
+	defer close(done)
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 	go func() {
-		<-sigChan
-		fmt.Println("\nInterrupt received, saving state...")
-		k.saveState(nil)
-		k.closeOnce.Do(func() { close(k.stopChan) })
+		select {
+		case <-sigChan:
+			fmt.Println("\nInterrupt received, saving state...")
+			k.saveState(nil)
+			k.closeOnce.Do(func() { close(k.stopChan) })
+		case <-done:
+		}
 	}()
 
+	minDP := 100
 	k.wg.Add(1)
 	go k.tameKangaroo()
 	fmt.Println("Populating distinguished points...")
-	minDP := 100
+
 	for k.tameMap.Len() < minDP {
 		time.Sleep(100 * time.Millisecond)
 		select {
 		case <-k.stopChan:
 			k.wg.Wait()
-			return k.result
+			k.mu.Lock()
+			res := k.result
+			k.mu.Unlock()
+			return res
 		default:
 		}
 	}
@@ -342,7 +377,10 @@ func (k *KangarooSolver) Solve() *big.Int {
 	}
 	go k.monitorProgress()
 	k.wg.Wait()
-	return k.result
+	k.mu.Lock()
+	res := k.result
+	k.mu.Unlock()
+	return res
 }
 func (k *KangarooSolver) monitorProgress() {
 	ticker := time.NewTicker(2 * time.Second)
