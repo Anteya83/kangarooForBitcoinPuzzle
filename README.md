@@ -11,7 +11,7 @@ A concurrent implementation of **Pollard's Kangaroo (Lambda) algorithm** in Go, 
 - **Multi‑worker concurrency** (goroutines) for faster search.
 - **State persistence**: saves and resumes progress automatically.
 - **Full Bitcoin key utilities**:
-  - Private key to WIF (compressed)
+  - Private key to WIF (uncompressed)
   - Public key extraction and compression
   - P2PKH and P2SH address generation
 - **CLI flags** for flexible configuration.
