@@ -314,6 +314,7 @@ func (k *KangarooSolver) Solve() *big.Int {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 	go func() {
 		<-sigChan
 		fmt.Println("\nInterrupt received, saving state...")

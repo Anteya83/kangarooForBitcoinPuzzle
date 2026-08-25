@@ -22,6 +22,7 @@ func TestKangarooSolveSmallRange(t *testing.T) {
 	b := big.NewInt(20000)
 
 	solver := NewKangarooSolver(cfg, pubKey, a, b)
+	defer os.Remove(solver.stateFile)
 	found := solver.Solve()
 	if found == nil {
 		t.Fatal("Solve returned nil")
@@ -43,6 +44,7 @@ func TestResume(t *testing.T) {
 	b := big.NewInt(20000)
 
 	solver1 := NewKangarooSolver(cfg, pubKey, a, b)
+	defer os.Remove(solver1.stateFile)
 	found1 := solver1.Solve()
 	if found1 != nil {
 		t.Logf("First solve unexpectedly found key: %v (state will be saved anyway)", found1)
@@ -51,6 +53,7 @@ func TestResume(t *testing.T) {
 	cfg2 := cfg
 	cfg2.TameStepsLimit = 1000000
 	solver2 := NewKangarooSolver(cfg2, pubKey, a, b)
+	defer os.Remove(solver2.stateFile)
 	found2 := solver2.Solve()
 
 	if found2 == nil {
