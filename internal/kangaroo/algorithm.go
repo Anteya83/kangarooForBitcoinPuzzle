@@ -39,6 +39,7 @@ type KangarooSolver struct {
 	posMu             sync.RWMutex
 	distinguishedMask *big.Int
 	saveMu            sync.Mutex
+	jumpPoints        []*types.Point
 }
 type Stats struct {
 	sync.Mutex
@@ -65,6 +66,13 @@ func NewKangarooSolver(cfg config.Config, publicKey *types.Point, a, b *big.Int)
 	for i := int64(1); i <= effectiveMaxJump; i++ {
 		jumpTable[i-1] = new(big.Int).Exp(big.NewInt(2), big.NewInt(i-1), nil)
 	}
+	jumpPoints := make([]*types.Point, effectiveMaxJump)
+	for i := int64(1); i <= effectiveMaxJump; i++ {
+		jumpPoints[i-1] = crypto.ScalarMult(
+			new(big.Int).Exp(big.NewInt(2), big.NewInt(i-1), nil),
+			&types.Point{X: crypto.Gx, Y: crypto.Gy},
+		)
+	}
 	mask := new(big.Int).Sub(
 		new(big.Int).Lsh(big.NewInt(1), uint(cfg.DistinguishedBits)),
 		big.NewInt(1),
@@ -79,6 +87,7 @@ func NewKangarooSolver(cfg config.Config, publicKey *types.Point, a, b *big.Int)
 		stopChan:          make(chan struct{}),
 		stats:             &Stats{StartTime: time.Now()},
 		jumpTable:         jumpTable,
+		jumpPoints:        jumpPoints,
 		maxJump:           effectiveMaxJump,
 		distinguishedMask: mask,
 		stateFile:         stateFile,
@@ -94,7 +103,7 @@ func (k *KangarooSolver) isDistinguished(p *types.Point) bool {
 	low.And(p.X, k.distinguishedMask)
 	return low.Sign() == 0
 }
-func (k *KangarooSolver) jumpDistance(p *types.Point) *big.Int {
+func (k *KangarooSolver) jumpDistance(p *types.Point) int64 {
 	xb := p.X.Bytes()
 	yb := p.Y.Bytes()
 	h := uint64(14695981039346656037)
@@ -107,7 +116,7 @@ func (k *KangarooSolver) jumpDistance(p *types.Point) *big.Int {
 		h *= 1099511628211
 	}
 	idx := int64(h % uint64(k.maxJump))
-	return k.jumpTable[idx]
+	return idx
 }
 
 func (k *KangarooSolver) saveState(foundKey *big.Int) error {
@@ -253,8 +262,10 @@ func (k *KangarooSolver) tameKangaroo() {
 				}
 			}
 
-			jump := k.jumpDistance(pos)
-			pos = crypto.AddPoints(pos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
+			idx := k.jumpDistance(pos)
+			jump := k.jumpTable[idx]
+			jumpPoint := k.jumpPoints[idx]
+			pos = crypto.AddPoints(pos, jumpPoint)
 			dist.Add(dist, jump)
 			totalJumps++
 
@@ -310,8 +321,10 @@ func (k *KangarooSolver) wildKangaroo(workerID int) {
 					}
 				}
 			}
-			jump := k.jumpDistance(wildPos)
-			wildPos = crypto.AddPoints(wildPos, crypto.ScalarMult(jump, &types.Point{X: crypto.Gx, Y: crypto.Gy}))
+			idx := k.jumpDistance(wildPos)
+			jump := k.jumpTable[idx]
+			jumpPoint := k.jumpPoints[idx]
+			wildPos = crypto.AddPoints(wildPos, jumpPoint)
 			wildDist.Add(wildDist, jump)
 			atomic.AddInt64(&k.stats.TotalWildSteps, 1)
 		}
