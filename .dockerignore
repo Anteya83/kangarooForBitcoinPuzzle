@@ -4,4 +4,5 @@ README.md
 .idea
 *.test
 state_*.bin
-getpub.txt
+Dockerfile
+.dockerignore
