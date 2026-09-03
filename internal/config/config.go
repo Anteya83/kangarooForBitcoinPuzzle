@@ -21,7 +21,7 @@ func DefaultConfig() Config {
 		NumWorkers:        16,
 		MaxJump:           0,
 		TameStepsLimit:    1000000000000000000,
-		DistinguishedBits: 12,
+		DistinguishedBits: 8,
 		NumShards:         64,
 		SaveInterval:      10000,
 	}

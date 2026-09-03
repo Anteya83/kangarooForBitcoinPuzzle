@@ -27,6 +27,7 @@ kangarooForBitcoinPuzzle/
 ├── go.mod
 ├── go.sum
 ├── .gitignore
+├── Dockerfile
 └── internal/
     ├── types/                # Point on elliptic curve
     ├── crypto/               # EC arithmetic, key parsing
@@ -65,6 +66,27 @@ Or build and run the binary:
 go build -o kangaroo main.go
 ./kangaroo
 ```
+### Run with Docker
+Build the image
+```bash
+docker build -t kangaroo-solver .
+```
+
+Run with default config
+```bash
+docker run --rm kangaroo-solver
+```
+Run with custom CLI flags (e.g., test key 12345)
+```bash
+docker run --rm kangaroo-solver \
+-pubkey 03f01d6b9018ab421dd410404cb869072065522bf85734008f105cf385a023a80f \
+-start 2710 \
+-end 4e20 \
+-workers 4 \
+-dpbits 4 \
+-maxjump 4
+```
+
 
 ### Running Tests
 

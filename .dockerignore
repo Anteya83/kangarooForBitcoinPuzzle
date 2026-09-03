@@ -1,0 +1,7 @@
+.git
+.gitignore
+README.md
+.idea
+*.test
+state_*.bin
+getpub.txt
